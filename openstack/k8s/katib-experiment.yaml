@@ -1,0 +1,53 @@
+# Kubeflow Katib — Kubernetes-native AutoML (HPO + early stopping + NAS) поверх Magnum.
+# Установка: kubectl apply -k "github.com/kubeflow/katib.git/manifests/v1beta1/installs/katib-standalone?ref=v0.18.0"
+# Запуск:    kubectl apply -f openstack/k8s/katib-experiment.yaml
+#            kubectl -n kubeflow get experiment automl-hgb -o yaml   # лучшая конфигурация
+# Каждый trial — Job, обучающий HistGradientBoosting на credit_synth и печатающий "auc=<value>".
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: automl-hgb
+  namespace: kubeflow
+spec:
+  objective:
+    type: maximize
+    goal: 0.99
+    objectiveMetricName: auc
+  algorithm:
+    algorithmName: tpe                # random | grid | bayesianoptimization | tpe | cmaes | hyperband
+  earlyStopping:
+    algorithmName: medianstop
+  parallelTrialCount: 3
+  maxTrialCount: 30
+  maxFailedTrialCount: 3
+  parameters:
+    - name: learning_rate
+      parameterType: double
+      feasibleSpace: {min: "0.01", max: "0.3"}
+    - name: max_leaf_nodes
+      parameterType: int
+      feasibleSpace: {min: "15", max: "127"}
+    - name: l2
+      parameterType: double
+      feasibleSpace: {min: "0.000001", max: "10"}
+  trialTemplate:
+    primaryContainerName: training
+    trialParameters:
+      - {name: lr, reference: learning_rate}
+      - {name: leaves, reference: max_leaf_nodes}
+      - {name: l2, reference: l2}
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: training
+                image: registry.example.local/automl-service:0.1.0
+                command: ["python", "-m", "benchmark.katib_trial",
+                          "--lr", "${trialParameters.lr}",
+                          "--leaves", "${trialParameters.leaves}",
+                          "--l2", "${trialParameters.l2}"]
+                resources: {requests: {cpu: "1", memory: 2Gi}}

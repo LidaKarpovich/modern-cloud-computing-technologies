@@ -1,0 +1,24 @@
+# Yandex DataSphere Jobs: удалённый запуск AutoML на ресурсах DataSphere из локального терминала.
+#   pip install datasphere
+#   yc init                      # авторизация в Yandex Cloud CLI
+#   datasphere project job execute -p <PROJECT_ID> -c cloud/yandex/config.yaml
+# Результат (модель + лидерборд) скачивается обратно в локальный каталог.
+name: automl-lightautoml
+desc: LightAutoML on credit_synth (coursework 2026, variant 20)
+cmd: >
+  python3 train_lama.py --train ${TRAIN} --target target --timeout 600
+  --model ${MODEL} --report ${REPORT}
+env:
+  python:
+    type: manual
+    version: "3.10"
+    requirements-file: requirements.txt
+    local-paths:
+      - train_lama.py
+inputs:
+  - ../../data/credit_synth_train.csv: TRAIN
+outputs:
+  - model.pkl: MODEL
+  - report.json: REPORT
+cloud-instance-types:
+  - c1.8          # 8 vCPU; для GPU-пресетов — g1.1

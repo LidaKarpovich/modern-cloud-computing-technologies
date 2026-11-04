@@ -1,0 +1,25 @@
+# Тот же эксперимент через Azure ML CLI v2:
+#   az ml job create --file cloud/azure/automl-job.yml -g rg-ml -w ws-ml
+$schema: https://azuremlschemas.azureedge.net/latest/autoMLJob.schema.json
+type: automl
+experiment_name: automl-coursework-cli
+compute: azureml:cpu-cluster
+task: classification
+primary_metric: AUC_weighted
+log_verbosity: info
+target_column_name: target
+n_cross_validations: 5
+training_data:
+  type: mltable
+  path: ./data/credit_mltable        # каталог с train.csv и MLTable
+limits:
+  timeout_minutes: 30
+  trial_timeout_minutes: 10
+  max_trials: 20
+  max_concurrent_trials: 4
+  enable_early_termination: true
+training:
+  enable_stack_ensemble: true
+  enable_vote_ensemble: true
+featurization:
+  mode: auto

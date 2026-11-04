@@ -1,0 +1,50 @@
+#cloud-config
+# Первичная настройка ВМ: Docker, монтирование тома Cinder в /models,
+# сборка образа сервиса из репозитория и запуск как systemd-юнита.
+package_update: true
+packages:
+  - docker.io
+  - git
+  - jq
+
+write_files:
+  - path: /etc/systemd/system/automl.service
+    content: |
+      [Unit]
+      Description=AutoML-as-a-Service
+      After=docker.service models.mount
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      ExecStartPre=-/usr/bin/docker rm -f automl
+      ExecStart=/usr/bin/docker run --name automl -p 8000:8000 \
+        -v /models:/models -e MAX_TIME_BUDGET=${max_budget} \
+        -e MAX_TRAIN_WORKERS=1 automl-service:latest
+      ExecStop=/usr/bin/docker stop automl
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/bin/automl-backup.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Резервное копирование моделей в Swift (нужен openrc в /root/openrc.sh)
+      . /root/openrc.sh 2>/dev/null || exit 0
+      cd /models && for f in *.joblib *.json; do
+        [ -f "$f" ] && openstack object create ${swift_bucket} "$f" >/dev/null
+      done
+
+runcmd:
+  # Том Cinder появляется как второй диск (обычно /dev/vdb) — ждём, форматируем при первом запуске
+  - 'for i in $(seq 1 60); do [ -b /dev/vdb ] && break; sleep 5; done'
+  - 'blkid /dev/vdb || mkfs.ext4 -L models /dev/vdb'
+  - mkdir -p /models
+  - 'grep -q LABEL=models /etc/fstab || echo "LABEL=models /models ext4 defaults,nofail 0 2" >> /etc/fstab'
+  - mount -a
+  - chown 1000:1000 /models
+  - git clone --depth 1 -b ${repo_ref} ${repo_url} /opt/automl-cloud
+  - docker build -t automl-service:latest -f /opt/automl-cloud/service/Dockerfile /opt/automl-cloud
+  - systemctl daemon-reload
+  - systemctl enable --now automl.service
+  - 'echo "*/30 * * * * root /usr/local/bin/automl-backup.sh" > /etc/cron.d/automl-backup'

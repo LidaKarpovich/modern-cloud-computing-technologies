@@ -1,0 +1,4 @@
+lightautoml>=0.4
+pandas
+scikit-learn
+joblib

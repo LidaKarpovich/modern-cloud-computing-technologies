@@ -1,0 +1,10 @@
+scikit-learn>=1.5
+pandas>=2.2
+numpy>=1.26
+joblib>=1.4
+starlette>=0.37
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+requests>=2.31
+boto3>=1.34
+threadpoolctl>=3.1

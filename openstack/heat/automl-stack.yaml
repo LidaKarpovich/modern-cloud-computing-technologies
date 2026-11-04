@@ -1,0 +1,89 @@
+heat_template_version: 2021-04-16
+# Альтернатива Terraform средствами самого OpenStack (оркестратор Heat):
+#   openstack stack create -t openstack/heat/automl-stack.yaml \
+#     --parameter key_name=mykey --parameter image=Ubuntu-24.04 \
+#     --parameter repo_url=https://github.com/<you>/automl-cloud.git automl
+#   openstack stack output show automl api_url
+description: AutoML-as-a-Service (coursework 2026, variant 20)
+
+parameters:
+  key_name: {type: string}
+  image: {type: string, default: Ubuntu-24.04}
+  flavor: {type: string, default: m1.large}
+  external_network: {type: string, default: public}
+  repo_url: {type: string}
+  volume_size: {type: number, default: 20}
+
+resources:
+  net:
+    type: OS::Neutron::Net
+  subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network: {get_resource: net}
+      cidr: 10.30.0.0/24
+      dns_nameservers: [8.8.8.8]
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info: {network: {get_param: external_network}}
+  router_if:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router: {get_resource: router}
+      subnet: {get_resource: subnet}
+  sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules:
+        - {protocol: tcp, port_range_min: 22, port_range_max: 22}
+        - {protocol: tcp, port_range_min: 8000, port_range_max: 8000}
+  port:
+    type: OS::Neutron::Port
+    properties:
+      network: {get_resource: net}
+      security_groups: [{get_resource: sg}]
+      fixed_ips: [{subnet: {get_resource: subnet}}]
+  fip:
+    type: OS::Neutron::FloatingIP
+    depends_on: router_if
+    properties:
+      floating_network: {get_param: external_network}
+      port_id: {get_resource: port}
+  models_volume:
+    type: OS::Cinder::Volume
+    properties: {size: {get_param: volume_size}, name: automl-models}
+  server:
+    type: OS::Nova::Server
+    properties:
+      name: automl-vm
+      image: {get_param: image}
+      flavor: {get_param: flavor}
+      key_name: {get_param: key_name}
+      networks: [{port: {get_resource: port}}]
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params: {__REPO__: {get_param: repo_url}}
+          template: |
+            #cloud-config
+            packages: [docker.io, git]
+            runcmd:
+              - 'for i in $(seq 1 60); do [ -b /dev/vdb ] && break; sleep 5; done'
+              - 'blkid /dev/vdb || mkfs.ext4 -L models /dev/vdb'
+              - mkdir -p /models && mount /dev/vdb /models && chown 1000:1000 /models
+              - git clone --depth 1 __REPO__ /opt/automl-cloud
+              - docker build -t automl-service -f /opt/automl-cloud/service/Dockerfile /opt/automl-cloud
+              - docker run -d --restart=always --name automl -p 8000:8000 -v /models:/models automl-service
+  volume_attach:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: {get_resource: server}
+      volume_id: {get_resource: models_volume}
+
+outputs:
+  api_url:
+    value:
+      str_replace:
+        template: http://IP:8000
+        params: {IP: {get_attr: [fip, floating_ip_address]}}

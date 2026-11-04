@@ -1,0 +1,60 @@
+# AutoML-сервис в Kubernetes-кластере OpenStack Magnum (или Cluster API Provider OpenStack).
+#   openstack coe cluster create automl-k8s --cluster-template k8s-template --node-count 3
+#   openstack coe cluster config automl-k8s --dir ~/.kube && export KUBECONFIG=~/.kube/config
+#   docker push <registry>/automl-service:0.1.0  && kubectl apply -f openstack/k8s/automl-service.yaml
+# Тома — через Cinder CSI (StorageClass "csi-cinder-sc-delete" в шаблонах Magnum);
+# внешний IP — через Octavia (Service type LoadBalancer).
+apiVersion: v1
+kind: Namespace
+metadata: {name: automl}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: models, namespace: automl}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: csi-cinder-sc-delete
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: automl-api, namespace: automl}
+spec:
+  replicas: 1                      # одна реплика: том RWO + задачи обучения в памяти процесса
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: automl-api}}
+  template:
+    metadata:
+      labels: {app: automl-api}
+      annotations: {prometheus.io/scrape: "true", prometheus.io/port: "8000", prometheus.io/path: /metrics}
+    spec:
+      securityContext: {runAsUser: 1000, fsGroup: 1000}
+      containers:
+        - name: api
+          image: registry.example.local/automl-service:0.1.0
+          ports: [{containerPort: 8000}]
+          env:
+            - {name: MODEL_DIR, value: /models}
+            - {name: MAX_TIME_BUDGET, value: "1800"}
+            - {name: MAX_TRAIN_WORKERS, value: "2"}
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health, port: 8000}, initialDelaySeconds: 20, periodSeconds: 30}
+          volumeMounts: [{name: models, mountPath: /models}]
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: models}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: automl-api
+  namespace: automl
+  annotations:
+    loadbalancer.openstack.org/keep-floatingip: "true"
+spec:
+  type: LoadBalancer
+  selector: {app: automl-api}
+  ports: [{port: 80, targetPort: 8000}]
